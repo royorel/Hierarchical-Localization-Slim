@@ -9,4 +9,3 @@ h5py
 packaging
 pycolmap>=3.12.6
 lightglue @ git+https://github.com/cvg/LightGlue
-romatch>=0.1.2
