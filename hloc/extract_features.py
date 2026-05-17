@@ -26,124 +26,24 @@ line using their name. Each is a dictionary with the following entries:
     - preprocessing: how to preprocess the images read from disk.
 """
 confs = {
-    "superpoint_aachen": {
-        "output": "feats-superpoint-n4096-r1024",
-        "model": {
-            "name": "superpoint",
-            "nms_radius": 3,
-            "max_keypoints": 4096,
-        },
-        "preprocessing": {
-            "grayscale": True,
-            "resize_max": 1024,
-        },
-    },
-    # Resize images to 1600px even if they are originally smaller.
-    # Improves the keypoint localization if the images are of good quality.
-    "superpoint_max": {
-        "output": "feats-superpoint-n4096-rmax1600",
-        "model": {
-            "name": "superpoint",
-            "nms_radius": 3,
-            "max_keypoints": 4096,
-        },
-        "preprocessing": {
-            "grayscale": True,
-            "resize_max": 1600,
-            "resize_force": True,
-        },
-    },
-    "superpoint_inloc": {
-        "output": "feats-superpoint-n4096-r1600",
-        "model": {
-            "name": "superpoint",
-            "nms_radius": 4,
-            "max_keypoints": 4096,
-        },
-        "preprocessing": {
-            "grayscale": True,
-            "resize_max": 1600,
-        },
-    },
-    "r2d2": {
-        "output": "feats-r2d2-n5000-r1024",
-        "model": {
-            "name": "r2d2",
-            "max_keypoints": 5000,
-        },
-        "preprocessing": {
-            "grayscale": False,
-            "resize_max": 1024,
-        },
-    },
-    "d2net-ss": {
-        "output": "feats-d2net-ss",
-        "model": {
-            "name": "d2net",
-            "multiscale": False,
-        },
-        "preprocessing": {
-            "grayscale": False,
-            "resize_max": 1600,
-        },
-    },
-    "sift": {
-        "output": "feats-sift",
-        "model": {"name": "dog"},
-        "preprocessing": {
-            "grayscale": True,
-            "resize_max": 1600,
-        },
-    },
-    "sosnet": {
-        "output": "feats-sosnet",
-        "model": {"name": "dog", "descriptor": "sosnet"},
-        "preprocessing": {
-            "grayscale": True,
-            "resize_max": 1600,
-        },
-    },
-    "disk": {
-        "output": "feats-disk",
-        "model": {
-            "name": "disk",
-            "max_keypoints": 5000,
-        },
-        "preprocessing": {
-            "grayscale": False,
-            "resize_max": 1600,
-        },
-    },
-    "aliked-n16": {
-        "output": "feats-aliked-n16",
+    "aliked-n32": {
+        "output": "feats-aliked-n32",
         "model": {
             "name": "aliked",
-            "model_name": "aliked-n16",
+            "model_name": "aliked-n32",
+            "detection_threshold": 0.3,
         },
         "preprocessing": {
             "grayscale": False,
+            "rgba": True,
+            "white_bg": True,
             "resize_max": 1024,
         },
     },
     # Global descriptors
-    "dir": {
-        "output": "global-feats-dir",
-        "model": {"name": "dir"},
-        "preprocessing": {"resize_max": 1024},
-    },
     "netvlad": {
         "output": "global-feats-netvlad",
         "model": {"name": "netvlad"},
-        "preprocessing": {"resize_max": 1024},
-    },
-    "openibl": {
-        "output": "global-feats-openibl",
-        "model": {"name": "openibl"},
-        "preprocessing": {"resize_max": 1024},
-    },
-    "megaloc": {
-        "output": "global-feats-megaloc",
-        "model": {"name": "megaloc"},
         "preprocessing": {"resize_max": 1024},
     },
 }
@@ -170,6 +70,8 @@ class ImageDataset(torch.utils.data.Dataset):
     default_conf = {
         "globs": ["*.jpg", "*.png", "*.jpeg", "*.JPG", "*.PNG"],
         "grayscale": False,
+        "rgba": False,
+        "white_bg": False,
         "resize_max": None,
         "resize_force": False,
         "interpolation": "cv2_area",  # pil_linear is more accurate but slower
@@ -202,7 +104,7 @@ class ImageDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, idx):
         name = self.names[idx]
-        image = read_image(self.root / name, self.conf.grayscale)
+        image = read_image(self.root / name, self.conf.grayscale, self.conf.rgba, self.conf.white_bg)
         image = image.astype(np.float32)
         size = image.shape[:2][::-1]
 
@@ -260,7 +162,7 @@ def main(
     model = Model(conf["model"]).eval().to(device)
 
     loader = torch.utils.data.DataLoader(
-        dataset, num_workers=1, shuffle=False, pin_memory=True
+        dataset, num_workers=5, shuffle=False, pin_memory=True
     )
     for idx, data in enumerate(tqdm(loader)):
         name = dataset.names[idx]

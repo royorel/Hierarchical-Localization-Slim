@@ -2,7 +2,7 @@ import contextlib
 from pathlib import Path
 from typing import ContextManager, Mapping, Tuple
 
-import cv2
+from PIL import Image
 import h5py
 import numpy as np
 import pycolmap
@@ -10,16 +10,19 @@ import pycolmap
 from .parsers import names_to_pair, names_to_pair_old
 
 
-def read_image(path, grayscale=False):
+def read_image(path, grayscale=False, rgba=False, white_bg=False):
     if grayscale:
-        mode = cv2.IMREAD_GRAYSCALE
+        image = np.array(Image.open(path).convert("L"))
+    elif rgba:
+        image = np.array(Image.open(path).convert("RGBA"))
+        bg = 255 if white_bg else 0
+        mask = image[...,3:]
+        mask = mask / mask.max()
+        image = (mask * image[...,:3] + bg * (1 - mask)).astype(np.uint8)
     else:
-        mode = cv2.IMREAD_COLOR
-    image = cv2.imread(str(path), mode | cv2.IMREAD_IGNORE_ORIENTATION)
+        image = np.array(Image.open(path).convert("RGB"))
     if image is None:
         raise ValueError(f"Cannot read image {path}.")
-    if not grayscale and len(image.shape) == 3:
-        image = image[:, :, ::-1]  # BGR to RGB
     return image
 
 
@@ -76,6 +79,7 @@ def get_matches(path: Path, name0: str, name1: str) -> Tuple[np.ndarray]:
     matches = np.stack([idx, matches[idx]], -1)
     if reverse:
         matches = np.flip(matches, -1)
+    
     scores = scores[idx]
     return matches, scores
 

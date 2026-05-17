@@ -7,12 +7,29 @@ from threading import Thread
 from typing import Dict, List, Optional, Tuple, Union
 
 import h5py
+import glob
 import torch
+import numpy as np
 from tqdm import tqdm
+from PIL import Image
+from torchvision.transforms import v2
 
 from . import logger, matchers
 from .utils.base_model import dynamic_load
 from .utils.parsers import names_to_pair, names_to_pair_old, parse_retrieval
+
+
+roma_transforms = [v2.Compose([v2.Resize(560),
+                               v2.PILToTensor(),
+                               v2.ToDtype(torch.float32, scale=True),
+                               v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]), # ImageNet normalization
+                              ]),
+                   v2.Compose([v2.Resize(864),
+                               v2.PILToTensor(),
+                               v2.ToDtype(torch.float32, scale=True),
+                               v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]), # ImageNet normalization
+                              ]),
+                  ]
 
 """
 A set of standard configurations that can be directly selected from the command
@@ -21,41 +38,15 @@ line using their name. Each is a dictionary with the following entries:
     - model: the model configuration, as passed to a feature matcher.
 """
 confs = {
-    "superpoint+lightglue": {
-        "output": "matches-superpoint-lightglue",
+    "aliked+roma": {
+        "output": "matches-aliked-roma",
+        "requires_images": True,
+        "white_bg": True,
+        "transforms": roma_transforms,
         "model": {
-            "name": "lightglue",
-            "features": "superpoint",
-        },
-    },
-    "disk+lightglue": {
-        "output": "matches-disk-lightglue",
-        "model": {
-            "name": "lightglue",
-            "features": "disk",
-        },
-    },
-    "aliked+lightglue": {
-        "output": "matches-aliked-lightglue",
-        "model": {
-            "name": "lightglue",
-            "features": "aliked",
-        },
-    },
-    "superglue": {
-        "output": "matches-superglue",
-        "model": {
-            "name": "superglue",
-            "weights": "outdoor",
-            "sinkhorn_iterations": 50,
-        },
-    },
-    "superglue-fast": {
-        "output": "matches-superglue-it5",
-        "model": {
-            "name": "superglue",
-            "weights": "outdoor",
-            "sinkhorn_iterations": 5,
+            "name": "roma",
+            'discard_match_th': 0.4,
+            'device': 'cuda',
         },
     },
     "NN-superpoint": {
@@ -81,11 +72,8 @@ confs = {
             "do_mutual_check": True,
         },
     },
-    "adalam": {
-        "output": "matches-adalam",
-        "model": {"name": "adalam"},
-    },
 }
+
 
 
 class WorkQueue:
@@ -114,25 +102,72 @@ class WorkQueue:
 
 
 class FeaturePairsDataset(torch.utils.data.Dataset):
-    def __init__(self, pairs, feature_path_q, feature_path_r):
+    def __init__(self, pairs, feature_path_q, feature_path_r, 
+                 requires_images=False, im_root=None, transforms=None, white_bg=False):
         self.pairs = pairs
         self.feature_path_q = feature_path_q
         self.feature_path_r = feature_path_r
+        self.requires_images = requires_images
+        self.white_bg = white_bg
+        if self.requires_images:
+            self.im_root = im_root
+            globs = ["*.jpg", "*.png", "*.jpeg", "*.JPG", "*.PNG"]
+            self.transforms = transforms
+            
+            logger.info(f"Matcher requires raw images.")
+            paths = []
+            for g in globs:
+                paths += glob.glob((Path(self.im_root) / "**" / g).as_posix(), recursive=True)
+            if len(paths) == 0:
+                raise ValueError(f"Could not find any image in root: {self.im_root}.")
+            paths = sorted(set(paths))
+            self.names = {Path(im_path).name: im_path for im_path in paths}
+            logger.info(f"Found {len(self.names)} images in root {self.im_root}.")
 
     def __getitem__(self, idx):
         name0, name1 = self.pairs[idx]
         data = {}
+        
         with h5py.File(self.feature_path_q, "r") as fd:
             grp = fd[name0]
             for k, v in grp.items():
                 data[k + "0"] = torch.from_numpy(v.__array__()).float()
             # some matchers might expect an image but only use its size
-            data["image0"] = torch.empty((1,) + tuple(grp["image_size"])[::-1])
+            if self.requires_images:
+                im0 = Image.open(self.names[name0])
+                if im0.mode == "RGBA" and self.white_bg:
+                    im_data = np.array(im0)
+                    im, mask = im_data[...,:3], im_data[...,3:] / im_data[...,3:].max()
+                    im0 = Image.fromarray((mask * im + 255 * (1-mask)).astype(np.uint8))
+                
+                if self.transforms is not None:
+                    im0_out = []
+                    for transform in self.transforms:
+                        im0_out.append(transform(im0))
+                
+                data["image0"] = im0_out
+            else:
+                data["image0"] = torch.empty((1,) + tuple(grp["image_size"])[::-1])
         with h5py.File(self.feature_path_r, "r") as fd:
             grp = fd[name1]
             for k, v in grp.items():
                 data[k + "1"] = torch.from_numpy(v.__array__()).float()
-            data["image1"] = torch.empty((1,) + tuple(grp["image_size"])[::-1])
+            if self.requires_images:
+                im1 = Image.open(self.names[name1]).convert("RGB")
+                if im0.mode == "RGBA" and self.white_bg:
+                    im_data = np.array(im1)
+                    im, mask = im_data[...,:3], im_data[...,3:] / im_data[...,3:].max()
+                    im1 = Image.fromarray((mask * im + 255 * (1-mask)).astype(np.uint8))
+                
+                if self.transforms is not None:
+                    im1_out = []
+                    for transform in self.transforms:
+                        im1_out.append(transform(im1))
+                
+                data["image1"] = im1_out
+            else:
+                data["image1"] = torch.empty((1,) + tuple(grp["image_size"])[::-1])
+        
         return data
 
     def __len__(self):
@@ -141,6 +176,7 @@ class FeaturePairsDataset(torch.utils.data.Dataset):
 
 def writer_fn(inp, match_path):
     pair, pred = inp
+
     with h5py.File(str(match_path), "a", libver="latest") as fd:
         if pair in fd:
             del fd[pair]
@@ -160,6 +196,7 @@ def main(
     matches: Optional[Path] = None,
     features_ref: Optional[Path] = None,
     overwrite: bool = False,
+    image_dir: Optional[Path] = None,
 ) -> Path:
     if isinstance(features, Path) or Path(features).exists():
         features_q = features
@@ -178,7 +215,7 @@ def main(
 
     if features_ref is None:
         features_ref = features_q
-    match_from_paths(conf, pairs, matches, features_q, features_ref, overwrite)
+    match_from_paths(conf, pairs, matches, features_q, features_ref, overwrite, image_dir)
 
     return matches
 
@@ -214,6 +251,7 @@ def match_from_paths(
     feature_path_q: Path,
     feature_path_ref: Path,
     overwrite: bool = False,
+    image_dir: Path = None,
 ) -> Path:
     logger.info(
         "Matching local features with configuration:" f"\n{pprint.pformat(conf)}"
@@ -237,7 +275,11 @@ def match_from_paths(
     Model = dynamic_load(matchers, conf["model"]["name"])
     model = Model(conf["model"]).eval().to(device)
 
-    dataset = FeaturePairsDataset(pairs, feature_path_q, feature_path_ref)
+    dataset = FeaturePairsDataset(pairs, feature_path_q, feature_path_ref,
+                                  requires_images=conf.get('requires_images', False),
+                                  im_root=image_dir,
+                                  transforms=conf.get('transforms', None),
+                                  white_bg=conf.get("white_bg", False),)
     loader = torch.utils.data.DataLoader(
         dataset, num_workers=5, batch_size=1, shuffle=False, pin_memory=True
     )
@@ -249,8 +291,9 @@ def match_from_paths(
             for k, v in data.items()
         }
         pred = model(data)
-        pair = names_to_pair(*pairs[idx])
+        pair = names_to_pair(*pairs[idx])   
         writer_queue.put((pair, pred))
+
     writer_queue.join()
     logger.info("Finished exporting matches.")
 
