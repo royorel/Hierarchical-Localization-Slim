@@ -1,3 +1,16 @@
+# Hierarchical-Localization-Slim
+
+This is a slim fork of [cvg/Hierarchical-Localization](https://github.com/cvg/Hierarchical-Localization) (hloc), by Paul-Edouard Sarlin and contributors, used for the per-frame COLMAP triangulation of [Blender-Moments](https://github.com/royorel/Blender-Moments). It keeps the modules that pipeline uses and changes the following.
+
+- **Roma matcher.** `hloc/matchers/roma.py` adds the [RoMa](https://github.com/Parskatt/RoMa) dense matcher, with a mean-certainty threshold for discarding image pairs that is set by the caller's matcher configuration.
+- **ALIKED settings.** The `aliked-n32` extractor configuration used with Roma on synthetic renders.
+- **Gauge-fixed bundle adjustment.** `hloc/bundle_adjustment.py` adds a bundle-adjustment primitive that refines camera extrinsics with the gauge fixed.
+- **Slim module set.** Extractors, matchers, and pipelines the triangulation does not use are removed, along with their requirements.
+
+The fork is released under the same Apache-2.0 license as upstream. Upstream's README follows unchanged, so some of the modules it describes are not in this fork. Please cite upstream hloc when you use this code.
+
+---
+
 # hloc - the hierarchical localization toolbox
 
 This is `hloc`, a modular toolbox for state-of-the-art 6-DoF visual localization. It implements [Hierarchical Localization](https://arxiv.org/abs/1812.03506), leveraging image retrieval and feature matching, and is fast, accurate, and scalable. This codebase combines and makes easily accessible years of research on image matching and Structure-from-Motion.
